@@ -1,6 +1,7 @@
 # get shit
 from load_gtsrb import load_gtsrb_images
 sampleSize = 50
+
 # acquire data
 datapath = "/home/fuckery/Downloads/GTSRB_Final_Training_Images/GTSRB/Final_Training/Images"
 [imgs, labels, class_descs, sign_ids] = load_gtsrb_images(datapath,[1, 2],sampleSize)
@@ -66,6 +67,34 @@ for i, image_file in enumerate(image_files):
         plt.imshow(convResult,'gray')
         #plt.show()
     print(results)
+
+#plt.figure()
+#plt.scatter(results[0,0:sampleSize-1],results[1,0:sampleSize-1],c="RED")
+#plt.scatter(results[0,sampleSize:2*sampleSize-1],results[1,sampleSize:2*sampleSize-1],c="BLUE")
+#plt.show()
+
+# define separating line
+w1 = 1
+w2 = 1
+b = 0
+
+# count good and bad classifications by the separating line
+good = 0
+bad = 0
+for i in range(0,2*sampleSize):
+    if w1 * results[0,i] + w2 * results[1,i] > b :
+        if i < sampleSize:
+            good = good+1
+        else:
+            bad = bad + 1
+    else:
+        if i >= sampleSize:
+            good = good+1
+        else:
+            bad = bad + 1
+
+print((good,bad))
+
 plt.figure()
 plt.scatter(results[0,0:sampleSize-1],results[1,0:sampleSize-1],c="RED")
 plt.scatter(results[0,sampleSize:2*sampleSize-1],results[1,sampleSize:2*sampleSize-1],c="BLUE")
