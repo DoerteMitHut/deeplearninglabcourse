@@ -1,6 +1,6 @@
 # get shit
 from load_gtsrb import load_gtsrb_images
-sampleSize = 50
+sampleSize = 5
 
 # acquire data
 datapath = "/home/fuckery/Downloads/GTSRB_Final_Training_Images/GTSRB/Final_Training/Images"
@@ -11,11 +11,9 @@ import numpy as np
 
 import cv2 as cv
 
-def normalizeImage(img):
-    toRet = img.astype(np.float32)
-    variation = np.sqrt(((toRet-toRet.mean())**2).mean())
-    toRet = (toRet-toRet.mean())/variation
-    return toRet
+from util import *
+
+
 # change type from float32 to uint8 and convert to grayscale afterwards
 greyscaleImages = [ cv.cvtColor(img.astype(np.uint8), cv.COLOR_RGB2GRAY) for img in imgs]
 
@@ -26,14 +24,11 @@ image_files = [
 ]
 
 # the roi's limits in format [ymin, xmin, ymax, xmax]
-#roiCorners = [
-#    [10,8,85,80], # 30
-#    [10,10,104,104] # 50
-#]
 roiCorners = [
     [10,9,21,16], # 30
     [10,9,22,17] # 50
 ]
+
 results = np.zeros((2,len(greyscaleImages)))
 for i, image_file in enumerate(image_files):
     print("======================================")
@@ -57,7 +52,8 @@ for i, image_file in enumerate(image_files):
     plt.show()
     for j, testImg in enumerate(greyscaleImages):
 
-        convResult = cv.filter2D(normalizeImage(testImg),-1,kernel,borderType=cv.BORDER_CONSTANT)
+        #convResult = cv.filter2D(normalizeImage(testImg),-1,kernel,borderType=cv.BORDER_CONSTANT)
+        convResult = convolve(normalizeImage(testImg), kernel)
 
         results[i,j]=convResult.max()
 
@@ -65,7 +61,8 @@ for i, image_file in enumerate(image_files):
         plt.imshow(testImg,'gray')
         plt.subplot(2,1,2)
         plt.imshow(convResult,'gray')
-        #plt.show()
+        plt.show()
+
     print(results)
 
 #plt.figure()
