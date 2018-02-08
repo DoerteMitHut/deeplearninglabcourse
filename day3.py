@@ -9,10 +9,11 @@ import os
 # configuration
 logdir = os.path.dirname(os.path.realpath(__file__)) + '/log/'
 datapath = os.path.dirname(os.path.realpath(__file__)) + '/GTSRB/Final_Training/Images'
-chosenClasses = range(0, 5)
+chosenClasses = range(0, 43)
 numClasses = len(chosenClasses)
-maxSampleSize = 1000
-batchSize = 100
+maxSampleSize = 5000
+batchSize = 512
+numEpochs = 25
 
 # reset stuff
 tf.reset_default_graph()
@@ -21,11 +22,11 @@ tf.reset_default_graph()
 print("Loading data...")
 [images, labels, class_descs, sign_ids] = load_gtsrb_images(datapath, chosenClasses, maxSampleSize)
 # change type from float to uint8 and convert to grayscale afterwards
-images = np.array([cv.cvtColor(img.astype(np.uint8), cv.COLOR_RGB2GRAY) for img in images])
-images = images.reshape([len(labels), 32, 32, 1])
+#images = np.array([cv.cvtColor(img.astype(np.uint8), cv.COLOR_RGB2GRAY) for img in images])
+#images = images.reshape([len(labels), 32, 32, 1])
 
 # split data into trainign, testing and verification
-X = tf.placeholder(tf.float32, [None, 32, 32, 1])
+X = tf.placeholder(tf.float32, [None, 32, 32, 3])
 Y = tf.placeholder(tf.int32, [None])
 
 def buildConvLayer(input, convSize, convStride, poolSize, poolStride, inDepth, outDepth):
@@ -46,10 +47,7 @@ def buildFullyConnectedLayer(input, prevLayerSize, layerSize):
     biased = tf.add(tf.matmul(input, weights), 0.01*tf.random_normal([layerSize]))
     # apply rectified linear unit
     return tf.nn.relu(biased)
-    #relu = tf.nn.relu(biased)
-    #
-    #dropout = tf.nn.dropout(relu, 0.8)
-    #return dropout
+
 
 # ------ build network with GPU support --------
 with tf.device('/device:GPU:0'):
@@ -82,7 +80,7 @@ saver = tf.train.Saver()
 # --------- optimizer ----------
 crossentropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=out, labels=Y)
 loss_op = tf.reduce_mean(crossentropy)
-optimizer = tf.train.AdamOptimizer(learning_rate=0.00025    )
+optimizer = tf.train.AdamOptimizer(learning_rate=0.00025)
 train_op = optimizer.minimize(loss_op, global_step=tf.train.get_global_step())
 
 # ------- launch session -------
@@ -93,7 +91,7 @@ with tf.Session() as sess:
     sess.run(tf.global_variables_initializer())
 
     # restore last session
-    saver.restore(sess, tf.train.latest_checkpoint(logdir))
+    #saver.restore(sess, tf.train.latest_checkpoint(logdir))
 
     # save graph
     train_writer = tf.summary.FileWriter(logdir+'/train', sess.graph)
@@ -104,11 +102,11 @@ with tf.Session() as sess:
     indices = np.arange(len(images))
     np.random.shuffle(indices)
 
-    [trainingSetIndices, testSetIndices, validationSetIndices] = np.array_split(indices, 3)
-    [trainingSetLabels, testSetLabels, validationSetLabels] = np.array_split(labels[indices], 3)
+    numSamples = len(indices)
+    splitPoints = [int(numSamples*7/10), int(numSamples*9/10)]
+    [trainingSetIndices, validationSetIndices, testSetIndices] = np.split(indices, splitPoints)
+    [trainingSetLabels, validationSetLabels, testSetLabels] = np.split(labels[indices], splitPoints)
 
-    #[trainingSetIndices, testSetIndices] = np.split(indices, [int(len(indices)*75./100.)])
-    #[trainingSetLabels, testSetLabels] = np.split(labels[indices], [int(len(indices)*75./100.)])
 
     trainingSet = images[trainingSetIndices]
     testSet = images[testSetIndices]
@@ -120,20 +118,24 @@ with tf.Session() as sess:
 
     # execute optimization
     print("Start training...")
-    for epoch in range(0, 10):
+    for epoch in range(0, numEpochs):
+
+        print("Epoch: %d" % (epoch))
         for iter in range(0, len(batchesX)):
             sess.run(train_op, feed_dict={X: batchesX[iter], Y: batchesY[iter]})
-            saver.save(sess, logdir, global_step=iter)
+            print("Batch %d/%d" % (iter, len(batchesX)-1))
 
-            loss = sess.run(loss_op, feed_dict={X: trainingSet, Y: trainingSetLabels})
-            print("Test Loss: %f" % (loss))
+        saver.save(sess, logdir, global_step=epoch)
 
-            loss = sess.run(loss_op, feed_dict={X: validationSet, Y: validationSetLabels})
-            print("Validation Loss: %f" % (loss))
+        loss = sess.run(loss_op, feed_dict={X: trainingSet[:1000], Y: trainingSetLabels[:1000]})
+        print("Test Loss: %f" % (loss))
+
+        loss = sess.run(loss_op, feed_dict={X: validationSet[:1000], Y: validationSetLabels[:1000]})
+        print("Validation Loss: %f" % (loss))
 
     print("Optimization done!")
 
     # check performance
-    result = pred.eval( {X: testSet[:256]} )
-    predictions = tf.equal(tf.argmax(result, 1), tf.cast(testSetLabels[:256], tf.int64)).eval()
+    result = pred.eval( {X: testSet[:1000]} )
+    predictions = tf.equal(tf.argmax(result, 1), tf.cast(testSetLabels[:1000], tf.int64)).eval()
     print("Test accuracy: %s" % (np.sum(predictions)/len(predictions)))
