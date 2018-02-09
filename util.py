@@ -44,3 +44,9 @@ def pretty_time_delta(seconds):
         return '%dm%ds' % (minutes, seconds)
     else:
         return '%ds' % (seconds,)
+
+
+def batchify(data, labels, batchSize):
+    batchesX = np.split(data, np.arange(batchSize, len(data), batchSize))
+    batchesY = np.split(labels, np.arange(batchSize, len(labels), batchSize))
+    return [batchesX, batchesY]

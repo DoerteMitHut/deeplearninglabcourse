@@ -1,5 +1,5 @@
 from load_gtsrb import load_gtsrb_images
-from util import pretty_time_delta
+from util import pretty_time_delta, batchify
 
 import tensorflow as tf
 import numpy as np
@@ -35,7 +35,7 @@ introspect = args.introspect
 
 convStride = [1,1,1,1]
 poolStride = [1,2,2,1]
-chosenClasses = range(0, 43)
+chosenClasses = range(43)
 numClasses = len(chosenClasses)
 
 # reset stuff
@@ -186,8 +186,7 @@ with tf.Session() as sess:
     validationSet = images[validationSetIndices]
 
     # build batches
-    batchesX = np.split(trainingSet, np.arange(batchSize, len(trainingSet), batchSize))
-    batchesY = np.split(trainingSetLabels, np.arange(batchSize, len(trainingSetLabels), batchSize))
+    [batchesX, batchesY] = batchify(trainingSet, trainingSetLabels, batchSize)
 
     # some file writers
     hash = time.strftime("%Y%m%d%H%M%S")
@@ -197,8 +196,8 @@ with tf.Session() as sess:
     # optimize network
     print("Start training with %i epochs, starting from step %i..." % (numEpochs, global_step.eval()))
     learningStartTime = time.perf_counter()
-    for epoch in range(0, numEpochs):
-        for iter in range(0, len(batchesX)):
+    for epoch in range(numEpochs):
+        for iter in range(len(batchesX)):
             index = global_step.eval()
 
             #print("Batch %d/%d in epoch %d/%d" % (iter+1, len(batchesX), epoch+1, numEpochs))
@@ -238,7 +237,7 @@ with tf.Session() as sess:
         with tf.name_scope('weights'):
             with tf.name_scope('convolutions'):
                 for i, filtersInLayer in enumerate(convWeights):
-                    for target in range(0, filtersInLayer.shape[2]):
+                    for target in range(filtersInLayer.shape[2]):
                         # select [width, height, #channels out]
                         # and move the dimensions to the correct position
                         filterstack = tf.transpose(filtersInLayer[:,:,target,:], perm=[2,0,1])
@@ -255,5 +254,10 @@ with tf.Session() as sess:
         introspection_writer.close()
 
     # check performance
-    result = sess.run([accuracy_op, correct_prediction_op], feed_dict={X: testSet[:2000], Y: testSetLabels[:2000], keep_prob: 1.0})
-    print("Test accuracy: %s" % (result[0]))
+    [batchesX, batchesY] = batchify(testSet, testSetLabels, batchSize)
+    totalAcc = 0.0
+    for iter in range(len(batchesX)):
+        [accuracy] = sess.run([accuracy_op], feed_dict={X: batchesX[iter], Y: batchesY[iter], keep_prob: 1.0})
+        totalAcc += accuracy
+    totalAcc /= len(batchesX)
+    print("Test accuracy: %s" % (totalAcc))
