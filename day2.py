@@ -10,11 +10,13 @@ from sklearn.decomposition import PCA
 from sklearn.svm import SVC
 from sklearn.metrics import confusion_matrix
 
+import os
+
 # configuration
 chosenClasses = [0,13,20]
 #chosenClasses = range(0,43)
 maxSampleSize = 500
-datapath = "/home/fuckery/Downloads/GTSRB_Final_Training_Images/GTSRB/Final_Training/Images"
+datapath = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'GTSRB/Final_Training/Images/')
 
 maxNumMispredictedPreviews = 2
 

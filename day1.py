@@ -1,9 +1,11 @@
+import os
+
 # get shit
 from load_gtsrb import load_gtsrb_images
 sampleSize = 5
 
 # acquire data
-datapath = "/home/fuckery/Downloads/GTSRB_Final_Training_Images/GTSRB/Final_Training/Images"
+datapath = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'GTSRB/Final_Training/Images/')
 [imgs, labels, class_descs, sign_ids] = load_gtsrb_images(datapath,[1, 2],sampleSize)
 
 import matplotlib.pyplot as plt
