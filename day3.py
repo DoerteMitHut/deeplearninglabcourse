@@ -1,12 +1,12 @@
 from load_gtsrb import load_gtsrb_images
-from util import pretty_time_delta, batchify
+from util import pretty_time_delta, batchify, removeDiagonal
 
 import tensorflow as tf
 import numpy as np
+import matplotlib.pyplot as plt
 
 import os
 import time
-import datetime
 import argparse
 
 # define some command line args to simply change runtime parameters
@@ -45,20 +45,42 @@ tf.reset_default_graph()
 print("Loading data...")
 np.random.seed(seed=1337)
 [images, labels, class_descs, sign_ids] = load_gtsrb_images(datadir, chosenClasses, maxSampleSize)
-# generate indices here, so they directly depend on the random seed an are therefore reproducible trough multiple runs, such that the sets are deterministically selected
+class_descs = np.array(class_descs)
+
+# generate indices here, so they directly depend on the random seed an are
+# therefore reproducible trough multiple runs, such that the sets are
+# deterministically selected
 indices = np.arange(len(images))
 np.random.shuffle(indices)
 
+# remember the global step, used for the tensorboard timeseries.
+# this helps when the learning session gets somehow interrupted (e.g. hitting
+# and OOM error or user interruption), we can smoothly continue the learning
 global_step = tf.Variable(0, name='global_step', trainable=False)
 
 # graph input
 with tf.variable_scope('input'):
+    # the 32x32 RGB input image stack
     X = tf.placeholder(tf.float32, [None, 32, 32, 3])
+    # the class label
     Y = tf.placeholder(tf.int32, [None])
+    # probability to keep a unit when applying the dropout
     keep_prob = tf.placeholder(tf.float32)
 
 
 def buildConvLayer(input, convSize, convStride, poolSize, poolStride, inDepth, outDepth):
+    '''
+    Add a convolutional layer (similar to AlexNet) to a given input
+
+    :param tensorflow.Tensor input: A tensor from which this layer recieves its input data
+    :param int convSize: Size for the convolution mask
+    :param [int int int int] convStride: Stride for the convolution mask
+    :param int poolSize: Size of the pooling mask
+    :param [int int int int] poolStride: Stride for the pooling mask
+    :param int inDepth: Depth of the input layer
+    :param int outDepth: Depth of this layer, which is equivalent to the input depth for the next layer
+    :return [tensorflow.Tensor, tensorflow.Tensor, tensorflow.Tensor]:
+    '''
     # generate variables
     weights = tf.Variable(0.01*tf.random_normal([convSize,convSize,inDepth, outDepth]))
     biases = tf.Variable(0.01*tf.random_normal([outDepth]))
@@ -72,6 +94,7 @@ def buildConvLayer(input, convSize, convStride, poolSize, poolStride, inDepth, o
     # pool the relus output
     pooling = tf.nn.max_pool(relu, ksize=[1,poolSize,poolSize,1], strides=poolStride, padding='SAME')
 
+    # layer summarization for tensorboard
     tf.summary.histogram('weight_distribution', weights, collections=['per_epoch'])
     tf.summary.histogram('bias_distribution', biases, collections=['per_epoch'])
     tf.summary.histogram('relu_activation', relu, collections=['per_epoch'])
@@ -79,7 +102,17 @@ def buildConvLayer(input, convSize, convStride, poolSize, poolStride, inDepth, o
     return [pooling, weights, biases]
 
 
-def buildFullyConnectedLayer(input, prevLayerSize, layerSize, dropout):
+def buildFullyConnectedLayer(input, prevLayerSize, layerSize, pdropout):
+    '''
+    Add a convolutional layer (similar to the DCNN paper from 2012) to a given input
+
+    :param tensorflow.Tensor input: A tensor from which this layer recieves its input data
+    :param int prevLayerSize: Number of neurons in the previous layer
+    :param int layerSize: Number of neurons in this layer
+    :param float pdropout: Probability to keep a neuron in training
+    :return [tensorflow.Tensor, tensorflow.Tensor, tensorflow.Tensor]:
+    '''
+
     # build mapping
     weights = tf.Variable(0.01*tf.random_normal([prevLayerSize,layerSize]))
     biases = 0.01*tf.random_normal([layerSize])
@@ -88,12 +121,43 @@ def buildFullyConnectedLayer(input, prevLayerSize, layerSize, dropout):
     biased = tf.add(tf.matmul(input, weights), biases)
     # apply rectified linear unit
     relu = tf.nn.relu(biased)
+    # end with a dropout
+    dropout = tf.nn.dropout(relu, pdropout)
 
+    # layer summarization for tensorboard
     tf.summary.histogram("weight_distribution", weights, collections=['per_epoch'])
     tf.summary.histogram("bias_distribution", biases, collections=['per_epoch'])
     tf.summary.histogram('relu_activation', relu, collections=['per_epoch'])
 
-    return tf.nn.dropout(relu, dropout)
+    return dropout
+
+def plotSamplePredictions(sampleSet, predictions, topX=5):
+    for i, prediction in enumerate(predictions):
+        # select the fife highest prediction probabilities
+        indices = np.argsort(prediction)[::-1][:topX]
+
+        # present the image anlong with the predicted probabilities and their labels
+        ax = plt.subplot(1,len(predictions),i+1)
+        plt.imshow(sampleSet[i].astype(np.uint8))
+        labelText = ""
+        for (conficence, labelName) in list(zip(prediction[indices], class_descs[indices])):
+            labelText += '%f2.5 - %s\n' % (conficence, labelName)
+        ax.set_xlabel(labelText)
+
+
+def plotConfusionMatrix(cm, classes,
+                          normalize=False,
+                          title='Confusion matrix',
+                          cmap='hot'):
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
 
 
 # build network with GPU support
@@ -186,7 +250,7 @@ with tf.Session() as sess:
     validationSet = images[validationSetIndices]
 
     # build batches
-    [batchesX, batchesY] = batchify(trainingSet, trainingSetLabels, batchSize)
+    batches = batchify(trainingSet, trainingSetLabels, batchSize)
 
     # some file writers
     hash = time.strftime("%Y%m%d%H%M%S")
@@ -197,39 +261,37 @@ with tf.Session() as sess:
     print("Start training with %i epochs, starting from step %i..." % (numEpochs, global_step.eval()))
     learningStartTime = time.perf_counter()
     for epoch in range(numEpochs):
-        for iter in range(len(batchesX)):
+        for iter, batch in enumerate(batches):
             index = global_step.eval()
 
-            #print("Batch %d/%d in epoch %d/%d" % (iter+1, len(batchesX), epoch+1, numEpochs))
             # execute optimization step
-            _, summary = sess.run([train_op, batch_summary_op], feed_dict={X: batchesX[iter], Y: batchesY[iter], keep_prob:pdropout})
+            _, summary = sess.run([train_op, batch_summary_op], feed_dict={X: batch[0], Y: batch[1], keep_prob:pdropout})
 
             # save back statistics
             train_writer.add_summary(summary, index)
 
             # every few steps check performance against validation data set
             if (index % validationFreqency) == 0:
+                #TODO use all validation data available
                 summary = sess.run(epoch_summary_op, feed_dict={X: validationSet[:100], Y: validationSetLabels[:100], keep_prob:1.0})
                 validation_writer.add_summary(summary, index)
 
                 # approximate how much time is left
                 timeUntilNow = time.perf_counter() - learningStartTime
-                totalRuns = numEpochs*len(batchesX)
-                currentRuns = epoch*len(batchesX) + iter + 1
+                totalRuns = numEpochs*len(batches)
+                currentRuns = epoch*len(batches) + iter + 1
                 leftRuns = totalRuns - currentRuns
                 timeLeft = leftRuns*timeUntilNow/currentRuns
                 print('Done %d/%d. Approx time left %s ' % (currentRuns, totalRuns, pretty_time_delta(timeLeft)))
-                #lastValidationStartTime = time.perf_counter()
 
         saver.save(sess, logdir, global_step=global_step)
 
-    print("Optimization done!")
+    print("Optimization done! Took %s" % pretty_time_delta(time.perf_counter() - learningStartTime))
     validation_writer.close()
     train_writer.close()
 
     # introspect
     if introspect:
-        introspection_writer = tf.summary.FileWriter(logdir+'/introspection'+hash)
         print('Introspecting network')
         # each convolution mask has the dimensionality [width, height, #channels in, #channels out]
         # and we want [#channels in, width, height, 1], as we want to visualize the individual
@@ -248,16 +310,72 @@ with tf.Session() as sess:
                         tf.summary.image('source_'+str(target), filterstack, max_outputs=25, family='layer_'+str(i), collections=['introspection'])
                         print('Layer %i: %i/%i' % (i+1, target+1, filtersInLayer.shape[2].value))
 
+        # save introspection back to file
+        introspection_writer = tf.summary.FileWriter(logdir+'/introspection'+hash)
         introspection_summary_op = tf.summary.merge_all(key='introspection')
         summary = sess.run(introspection_summary_op)
         introspection_writer.add_summary(summary)
         introspection_writer.close()
 
     # check performance
-    [batchesX, batchesY] = batchify(testSet, testSetLabels, batchSize)
+    print("Evaluating prediction performance.")
+    batches = batchify(testSet, testSetLabels, batchSize)
+    # gather accuracy
     totalAcc = 0.0
-    for iter in range(len(batchesX)):
-        [accuracy] = sess.run([accuracy_op], feed_dict={X: batchesX[iter], Y: batchesY[iter], keep_prob: 1.0})
+    # and information about the predicted labels
+    allPredictionIndices = np.array([])
+    topPredictionLabels = np.empty((len(testSet), numClasses))
+    for i, batch in enumerate(batches):
+        [accuracy, predictionIndices, predictionValues] = sess.run([accuracy_op, correct_prediction_op, pred], feed_dict={X: batch[0], Y: batch[1], keep_prob: 1.0})
+        allPredictionIndices = np.append(allPredictionIndices, predictionIndices)
+        for j in range(batchSize):
+            topPredictionLabels[i*batchSize+j, :] = np.argsort(predictionValues[j,:])[::-1]
         totalAcc += accuracy
-    totalAcc /= len(batchesX)
-    print("Test accuracy: %s" % (totalAcc))
+    totalAcc /= len(batches)
+
+    print('Test accuracy: %s' % (totalAcc))
+
+    # save back meta information
+    cnfmat = sess.run(tf.contrib.metrics.confusion_matrix(topPredictionLabels[:, 0], testSetLabels))
+    plotConfusionMatrix(removeDiagonal(cnfmat), classes=class_descs)
+    plt.show()
+
+    topLabelsHistogram = np.zeros((numClasses, numClasses))
+    for i in range(len(testSet)):
+        for j in range(numClasses):
+            predictedLabel = int(topPredictionLabels[i, j])
+            trueLabel = int(testSetLabels[i])
+            topLabelsHistogram[predictedLabel, j] += predictedLabel == trueLabel
+
+    plt.imshow(np.log(topLabelsHistogram+1), cmap='hot')
+    plt.title('Log-Scaled Histogram')
+    plt.colorbar()
+    plt.xlabel('Rank')
+    plt.ylabel('Label')
+    plt.show()
+
+
+    # show examples
+    print('Present some examples....')
+
+    # start by selecting random examples from correctly classified
+    exampleIndices = np.where(allPredictionIndices)[0]
+    np.random.shuffle(exampleIndices)
+    exampleIndices = exampleIndices[:3]
+
+    [predictions] = sess.run([pred], feed_dict={X:testSet[exampleIndices], Y:trainingSetLabels[exampleIndices], keep_prob:1.0})
+
+    plotSamplePredictions(testSet[exampleIndices], predictions)
+    plt.suptitle('Examples for correct predictions')
+    plt.show()
+
+    # now show some examples where the classification failed
+    exampleIndices = np.where(allPredictionIndices == False)[0]
+    np.random.shuffle(exampleIndices)
+    exampleIndices = exampleIndices[:3]
+
+    [predictions] = sess.run([pred], feed_dict={X:testSet[exampleIndices], Y:trainingSetLabels[exampleIndices], keep_prob:1.0})
+
+    plotSamplePredictions(testSet[exampleIndices], predictions)
+    plt.suptitle('Examples for correct predictions')
+    plt.show()

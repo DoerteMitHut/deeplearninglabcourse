@@ -32,6 +32,8 @@ def convolve(image, kernel):
 
 
 def pretty_time_delta(seconds):
+    """ source: https://gist.github.com/thatalextaylor/7408395
+    """
     seconds = int(seconds)
     days, seconds = divmod(seconds, 86400)
     hours, seconds = divmod(seconds, 3600)
@@ -49,4 +51,9 @@ def pretty_time_delta(seconds):
 def batchify(data, labels, batchSize):
     batchesX = np.split(data, np.arange(batchSize, len(data), batchSize))
     batchesY = np.split(labels, np.arange(batchSize, len(labels), batchSize))
-    return [batchesX, batchesY]
+    return list(zip(batchesX, batchesY))
+
+
+def removeDiagonal(mat):
+    nonDiagonalMatrix = np.ones(mat.shape)-np.diag(np.ones(mat.shape[0]))
+    return mat*nonDiagonalMatrix
