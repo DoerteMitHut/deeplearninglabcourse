@@ -1,9 +1,12 @@
+#TODO SPLIT SETS PROPERLY
+
 from load_gtsrb import load_gtsrb_images
 from util import pretty_time_delta, batchify, removeDiagonal
 
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
+import cv2 as cv
 
 import os
 import time
@@ -46,12 +49,53 @@ print("Loading data...")
 np.random.seed(seed=1337)
 [images, labels, class_descs, sign_ids] = load_gtsrb_images(datadir, chosenClasses, maxSampleSize)
 class_descs = np.array(class_descs)
+images = np.array(images)
+
+#experiment with other color spaces
+#images = np.array([ cv.cvtColor(img.astype(np.uint8), cv.COLOR_RGB2YUV) for img in images])
+#for i in range(len(images)):
+#    images[i][:,:,0] = cv.equalizeHist(images[i][:,:,0])
+#around 98% accuracy top performance, so slightly worse than raw RGB
 
 # generate indices here, so they directly depend on the random seed an are
 # therefore reproducible trough multiple runs, such that the sets are
 # deterministically selected
 indices = np.arange(len(images))
 np.random.shuffle(indices)
+
+print("Generating test and training sets...")
+# split data set according to 70-20-10 rule
+trainingSetIndices = np.array([], np.int64)
+testSetIndices = np.array([], np.int64)
+validationSetIndices = np.array([], np.int64)
+trainingSetLabels = np.array([], np.uint32)
+testSetLabels = np.array([], np.uint32)
+validationSetLabels = np.array([], np.uint32)
+# keep label distribution balanced
+for currentLabel in range(numClasses):
+    labelIndices = np.where(labels==currentLabel)[0]
+    #np.random.shuffle(labelIndices)
+    numSamples = len(labelIndices)
+    splitPoints = [int(numSamples*7/10), int(numSamples*9/10)]
+
+    [curTrainingSetIndices, curTestSetIndices, curValidationSetIndices] = np.split(labelIndices, splitPoints)
+    trainingSetIndices = np.append(trainingSetIndices, curTrainingSetIndices)
+    testSetIndices = np.append(testSetIndices, curTestSetIndices)
+    validationSetIndices = np.append(validationSetIndices, curValidationSetIndices)
+
+    [curTrainingSetLabels, curTestSetLabels, curValidationSetLabels] = np.split(labels[labelIndices], splitPoints)
+    trainingSetLabels = np.append(trainingSetLabels, curTrainingSetLabels)
+    testSetLabels = np.append(testSetLabels, curTestSetLabels)
+    validationSetLabels = np.append(validationSetLabels, curValidationSetLabels)
+
+#shuffle the training set, such that each batches has data with different labels
+shuffleIndices = np.arange(len(trainingSetIndices))
+np.random.shuffle(shuffleIndices)
+trainingSet = images[trainingSetIndices[shuffleIndices]]
+trainingSetLabels = trainingSetLabels[shuffleIndices]
+
+testSet = images[testSetIndices]
+validationSet = images[validationSetIndices]
 
 # remember the global step, used for the tensorboard timeseries.
 # this helps when the learning session gets somehow interrupted (e.g. hitting
@@ -68,7 +112,7 @@ with tf.variable_scope('input'):
     keep_prob = tf.placeholder(tf.float32)
 
 
-def buildConvLayer(input, convSize, convStride, poolSize, poolStride, inDepth, outDepth):
+def buildConvLayer(input, convSize, convStride, poolSize, poolStride, inDepth, outDepth, pdropout):
     '''
     Add a convolutional layer (similar to AlexNet) to a given input
 
@@ -87,6 +131,9 @@ def buildConvLayer(input, convSize, convStride, poolSize, poolStride, inDepth, o
 
     # add actual convolution
     conv = tf.nn.conv2d(input, weights, strides=convStride, padding='SAME')
+
+    conv = tf.nn.dropout(conv, pdropout)
+
     # add an bias to the
     biased = tf.nn.bias_add(conv, biases)
     # connect the biased convolutions to the rectified linear unit
@@ -131,7 +178,7 @@ def buildFullyConnectedLayer(input, prevLayerSize, layerSize, pdropout):
 
     return dropout
 
-def plotSamplePredictions(sampleSet, predictions, topX=5):
+def plotSamplesWithRank(sampleSet, predictions, topX=5):
     for i, prediction in enumerate(predictions):
         # select the fife highest prediction probabilities
         indices = np.argsort(prediction)[::-1][:topX]
@@ -160,6 +207,9 @@ def plotConfusionMatrix(cm, classes,
     plt.xlabel('Predicted label')
 
 
+
+
+
 # build network with GPU support
 with tf.name_scope('model'):
     # we will use these for the introspection of the kernels
@@ -167,13 +217,13 @@ with tf.name_scope('model'):
 
     # add convolutional layer
     with tf.name_scope('convolution_layer_1'):
-        [first, weights, biases] = buildConvLayer(X, 5, convStride, 2, poolStride, X.shape[3].value, 32)
+        [firstConvLayer, weights, biases] = buildConvLayer(X, 5, convStride, 2, poolStride, X.shape[3].value, 32, keep_prob)
         convWeights.append(weights)
     with tf.name_scope('convolution_layer_2'):
-        [second, weights, biases] = buildConvLayer(first, 5, convStride, 2, poolStride, 32, 64)
+        [secondConvLayer, weights, biases] = buildConvLayer(firstConvLayer, 5, convStride, 2, poolStride, 32, 64, keep_prob)
         convWeights.append(weights)
     with tf.name_scope('convolution_layer_3'):
-        [lastConvLayer, weights, biases] = buildConvLayer(second, 5, convStride, 2, poolStride, 64, 128)
+        [lastConvLayer, weights, biases] = buildConvLayer(secondConvLayer, 5, convStride, 2, poolStride, 64, 128, keep_prob)
         convWeights.append(weights)
 
     # project from convolution to neurons
@@ -238,16 +288,10 @@ with tf.Session() as sess:
     graph_writer = tf.summary.FileWriter(logdir+'/graph', sess.graph)
     graph_writer.close()
 
-    print("Generating test and training sets...")
-    # split data set according to 70-20-10 rule
-    numSamples = len(indices)
-    splitPoints = [int(numSamples*7/10), int(numSamples*9/10)]
-    [trainingSetIndices, testSetIndices, validationSetIndices] = np.split(indices, splitPoints)
-    [trainingSetLabels, testSetLabels, validationSetLabels] = np.split(labels[indices], splitPoints)
-
-    trainingSet = images[trainingSetIndices]
-    testSet = images[testSetIndices]
-    validationSet = images[validationSetIndices]
+#    numSamples = len(indices)
+#    splitPoints = [int(numSamples*7/10), int(numSamples*9/10)]
+#    [trainingSetIndices, testSetIndices, validationSetIndices] = np.split(indices, splitPoints)
+#    [trainingSetLabels, testSetLabels, validationSetLabels] = np.split(labels[indices], splitPoints)
 
     # build batches
     batches = batchify(trainingSet, trainingSetLabels, batchSize)
@@ -328,7 +372,7 @@ with tf.Session() as sess:
     for i, batch in enumerate(batches):
         [accuracy, predictionIndices, predictionValues] = sess.run([accuracy_op, correct_prediction_op, pred], feed_dict={X: batch[0], Y: batch[1], keep_prob: 1.0})
         allPredictionIndices = np.append(allPredictionIndices, predictionIndices)
-        for j in range(batchSize):
+        for j in range(predictionValues.shape[0]):
             topPredictionLabels[i*batchSize+j, :] = np.argsort(predictionValues[j,:])[::-1]
         totalAcc += accuracy
     totalAcc /= len(batches)
@@ -365,7 +409,7 @@ with tf.Session() as sess:
 
     [predictions] = sess.run([pred], feed_dict={X:testSet[exampleIndices], Y:trainingSetLabels[exampleIndices], keep_prob:1.0})
 
-    plotSamplePredictions(testSet[exampleIndices], predictions)
+    plotSamplesWithRank(testSet[exampleIndices], predictions)
     plt.suptitle('Examples for correct predictions')
     plt.show()
 
@@ -376,6 +420,73 @@ with tf.Session() as sess:
 
     [predictions] = sess.run([pred], feed_dict={X:testSet[exampleIndices], Y:trainingSetLabels[exampleIndices], keep_prob:1.0})
 
-    plotSamplePredictions(testSet[exampleIndices], predictions)
-    plt.suptitle('Examples for correct predictions')
+    plotSamplesWithRank(testSet[exampleIndices], predictions)
+    plt.suptitle('Examples for bad predictions')
     plt.show()
+
+    """
+    for goodImage in testSet[np.where(allPredictionIndices == True)[0]][:5]:
+        plt.imshow(goodImage.astype(np.uint8))
+        plt.show()
+
+        [layer1Response] = sess.run([firstConvLayer], feed_dict={X: np.reshape(np.array([goodImage]),[1,32,32,3]), keep_prob:1.0})
+
+        outerSize = int(np.ceil(np.sqrt(layer1Response.shape[3])))
+        for j in range(layer1Response.shape[0]):
+            for i in range(layer1Response.shape[3]):
+                plt.subplot(outerSize, outerSize, i+1)
+                plt.imshow(layer1Response[0,:,:,i].astype(np.uint8))
+            plt.show()
+
+        [layer2Response] = sess.run([secondConvLayer], feed_dict={X: np.reshape(np.array([goodImage]),[1,32,32,3]), keep_prob:1.0})
+
+        outerSize = int(np.ceil(np.sqrt(layer2Response.shape[3])))
+        for j in range(layer2Response.shape[0]):
+            for i in range(layer2Response.shape[3]):
+                plt.subplot(outerSize, outerSize, i+1)
+                plt.imshow(layer2Response[j,:,:,i].astype(np.uint8))
+            plt.show()
+
+        [layer3Response] = sess.run([lastConvLayer], feed_dict={X: np.reshape(np.array([goodImage]),[1,32,32,3]), keep_prob:1.0})
+
+        outerSize = int(np.ceil(np.sqrt(layer3Response.shape[3])))
+        for j in range(layer3Response.shape[0]):
+            for i in range(layer3Response.shape[3]):
+                plt.subplot(outerSize, outerSize, i+1)
+                plt.imshow(layer3Response[j,:,:,i].astype(np.uint8))
+            plt.show()
+    """
+
+    # show some failed images with their layerwise responses
+    for failImage in testSet[np.where(allPredictionIndices == False)[0]][:5]:
+        #plt.imshow(cv.cvtColor(failImage.astype(np.uint8), cv.COLOR_YUV2RGB))
+        plt.imshow(failImage.astype(np.uint8))
+        plt.show()
+"""
+        [layer1Response] = sess.run([firstConvLayer], feed_dict={X: np.reshape(np.array([failImage]),[1,32,32,3]), keep_prob:1.0})
+
+        outerSize = int(np.ceil(np.sqrt(layer1Response.shape[3])))
+        for j in range(layer1Response.shape[0]):
+            for i in range(layer1Response.shape[3]):
+                plt.subplot(outerSize, outerSize, i+1)
+                plt.imshow(layer1Response[0,:,:,i].astype(np.uint8))
+            plt.show()
+
+        [layer2Response] = sess.run([secondConvLayer], feed_dict={X: np.reshape(np.array([failImage]),[1,32,32,3]), keep_prob:1.0})
+
+        outerSize = int(np.ceil(np.sqrt(layer2Response.shape[3])))
+        for j in range(layer2Response.shape[0]):
+            for i in range(layer2Response.shape[3]):
+                plt.subplot(outerSize, outerSize, i+1)
+                plt.imshow(layer2Response[j,:,:,i].astype(np.uint8))
+            plt.show()
+
+        [layer3Response] = sess.run([lastConvLayer], feed_dict={X: np.reshape(np.array([failImage]),[1,32,32,3]), keep_prob:1.0})
+
+        outerSize = int(np.ceil(np.sqrt(layer3Response.shape[3])))
+        for j in range(layer3Response.shape[0]):
+            for i in range(layer3Response.shape[3]):
+                plt.subplot(outerSize, outerSize, i+1)
+                plt.imshow(layer3Response[j,:,:,i].astype(np.uint8))
+            plt.show()
+"""
