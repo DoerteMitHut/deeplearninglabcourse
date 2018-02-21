@@ -1,7 +1,7 @@
 #TODO SPLIT SETS PROPERLY
 
 from load_gtsrb import load_gtsrb_images
-from util import pretty_time_delta, batchify, removeDiagonal
+from util import pretty_time_delta, batchify, removeDiagonal, plotConfusionMatrix
 
 import tensorflow as tf
 import numpy as np
@@ -188,29 +188,14 @@ def plotSamplesWithRank(sampleSet, predictions, topX=5):
         plt.imshow(sampleSet[i].astype(np.uint8))
         labelText = ""
         for (conficence, labelName) in list(zip(prediction[indices], class_descs[indices])):
-            labelText += '%f2.5 - %s\n' % (conficence, labelName)
+            labelText += '%2.5f - %s\n' % (conficence, labelName)
         ax.set_xlabel(labelText)
 
 
-def plotConfusionMatrix(cm, classes,
-                          normalize=False,
-                          title='Confusion matrix',
-                          cmap='hot'):
-    if normalize:
-        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
-
-    plt.imshow(cm, interpolation='nearest', cmap=cmap)
-    plt.title(title)
-    plt.colorbar()
-
-    plt.ylabel('True label')
-    plt.xlabel('Predicted label')
 
 
 
-
-
-# build network with GPU support
+# assemble network
 with tf.name_scope('model'):
     # we will use these for the introspection of the kernels
     convWeights = []
@@ -228,11 +213,17 @@ with tf.name_scope('model'):
 
     # project from convolution to neurons
     with tf.name_scope('projection'):
-        reconnection = tf.reshape(lastConvLayer, [-1,4*4*128])
+        numInputNeurons = 4*4*128
+        reconnection = tf.reshape(lastConvLayer, [-1,numInputNeurons])
+
+
+    # task 3.3 - comment all above out and use the following code
+    # numInputNeurons = 4*4*128
+    #reconnection = tf.reshape(X, [-1, numInputNeurons])
 
     # add two fully connected layers
     with tf.name_scope('fully_connected_layer_1'):
-        fcl1 = buildFullyConnectedLayer(reconnection, 4*4*128, 2*1024, keep_prob)
+        fcl1 = buildFullyConnectedLayer(reconnection, numInputNeurons, 2*1024, keep_prob)
     with tf.name_scope('fully_connected_layer_2'):
         fcl2 = buildFullyConnectedLayer(fcl1, 2*1024, 128, keep_prob)
 
@@ -458,7 +449,7 @@ with tf.Session() as sess:
     """
 
     # show some failed images with their layerwise responses
-    for failImage in testSet[np.where(allPredictionIndices == False)[0]][:5]:
+    for failImage in testSet[np.where(allPredictionIndices == False)[0]]:
         #plt.imshow(cv.cvtColor(failImage.astype(np.uint8), cv.COLOR_YUV2RGB))
         plt.imshow(failImage.astype(np.uint8))
         plt.show()

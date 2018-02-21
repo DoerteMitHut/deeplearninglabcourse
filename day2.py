@@ -1,4 +1,5 @@
 from load_gtsrb import load_gtsrb_images
+from util import plotConfusionMatrix, removeDiagonal
 
 import cv2 as cv
 
@@ -13,8 +14,8 @@ from sklearn.metrics import confusion_matrix
 import os
 
 # configuration
-chosenClasses = [0,13,20]
-#chosenClasses = range(0,43)
+#chosenClasses = [0,13,20]
+chosenClasses = range(43)
 maxSampleSize = 500
 datapath = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'GTSRB/Final_Training/Images/')
 
@@ -57,8 +58,8 @@ pcs = pca.transform(vectors)
 # present labeled data
 for currentLabel in chosenClasses:
     currentImages = pcs[labels == currentLabel, :]
-    plt.scatter(currentImages[:,0],currentImages[:,1], c=np.random.rand(3,), label=class_descs[currentLabel], alpha=0.3)
-plt.legend()
+    plt.scatter(currentImages[:50,0],currentImages[:50,1], c=np.random.rand(3,), label=class_descs[currentLabel], alpha=0.3)
+#plt.legend()
 plt.title('PCA')
 plt.show()
 
@@ -95,8 +96,11 @@ cnfMatErrs = cnfmat*nonDiagonalMatrix
 # error rate is the number of wrong classified out of all classified entities
 errorRate = cnfMatErrs.sum()/cnfmat.sum()
 
-print("confusion matrix:")
-print(cnfmat)
+#print("confusion matrix:")
+#print(cnfmat)
+plotConfusionMatrix(removeDiagonal(cnfmat), np.array(class_descs)[chosenClasses].tolist())
+plt.show()
+
 print("error rate: %f" % (errorRate))
 
 # show an example of a misclassified image, if existing

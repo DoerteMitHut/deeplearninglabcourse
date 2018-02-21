@@ -1,4 +1,5 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 def normalizeImage(img):
@@ -57,3 +58,29 @@ def batchify(data, labels, batchSize):
 def removeDiagonal(mat):
     nonDiagonalMatrix = np.ones(mat.shape)-np.diag(np.ones(mat.shape[0]))
     return mat*nonDiagonalMatrix
+
+
+def plotConfusionMatrix(cm, classes,
+                          normalize=False,
+                          title='Confusion matrix',
+                          cmap='hot'):
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+
+    # add image
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    # general setup
+    plt.title(title)
+    plt.colorbar()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+    # add discrete ticks
+    plt.gca().set_xticks(range(len(classes)))
+    plt.gca().set_xticklabels(range(len(classes)), rotation=90, fontsize=8)
+    plt.gca().set_yticks(range(len(classes)))
+    plt.gca().set_yticklabels(range(len(classes)), rotation=0, fontsize=8)
+    # add a grid
+    plt.hlines(y=np.arange(len(classes)+1)- 0.5, xmin=-0.5, xmax=len(classes)-0.5, color='blue')
+    plt.vlines(x=np.arange(len(classes)+1)- 0.5, ymin=-0.5, ymax=len(classes)-0.5, color='blue')
+    # tighten layout
+    plt.tight_layout()
